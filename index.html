@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Names in World: find your house</title>
+<meta name="description" content="An island where every person who comments gets a house and a number that never changes. Comment house to join.">
+<meta property="og:title" content="Names in World">
+<meta property="og:description" content="Comment house. Get a house and a number that never changes.">
+<meta property="og:image" content="map.jpg">
+<style>
+@font-face { font-family: Italiana; src: url(fonts/Italiana-Regular.ttf); font-display: swap; }
+@font-face { font-family: "DM Mono"; src: url(fonts/DMMono-Regular.ttf); font-display: swap; }
+:root { --bg: #070b14; --panel: #0f1522; --line: #252d3f; --text: #eef0f4; --dim: #9aa3b5; --amber: #f2b15c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; }
+.mono { font: 12px/1.4 "DM Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+h1 { font: 400 clamp(44px, 12vw, 76px)/1 Italiana, serif; margin: 10px 0 22px; }
+h1 em, h2 em { font-style: normal; color: var(--amber); }
+h2 { font: 400 30px/1.15 Italiana, serif; margin: 0 0 10px; }
+#map { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: #111a2a; }
+#map img { display: block; width: 100%; height: 100%; }
+.pin { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.pin::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 10px 3px rgba(242, 177, 92, .75); }
+.pin.open::after { background: transparent; border: 1px solid rgba(238, 240, 244, .7); box-shadow: none; }
+.pin.me::after { inset: 5px; background: #fff; box-shadow: 0 0 18px 7px var(--amber); }
+.pin:focus-visible { outline: 2px solid #fff; }
+#tag { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 6px 12px; border-radius: 6px; background: rgba(7, 11, 20, .88); font: 13px/1.4 "DM Mono", monospace; overflow-wrap: anywhere; text-align: center; }
+#tag:empty { display: none; }
+section { margin-top: 18px; padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+ol { margin: 0; padding-left: 22px; }
+li + li { margin-top: 6px; }
+label { display: block; margin-bottom: 8px; color: var(--dim); }
+input { width: 100%; min-height: 46px; padding: 10px 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: 16px "DM Mono", monospace; }
+input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+#found { min-height: 24px; margin: 10px 0 0; overflow-wrap: anywhere; }
+#list { margin-top: 12px; padding: 0; list-style: none; columns: 2; column-gap: 18px; font: 14px/1.5 "DM Mono", monospace; }
+#list li { margin: 0 0 4px; break-inside: avoid; overflow-wrap: anywhere; }
+#list b { font-weight: 400; color: var(--amber); }
+.fine { margin: 0; font-size: 14px; color: var(--dim); }
+.fine + .fine { margin-top: 8px; }
+@media (max-width: 480px) { #list { columns: 1; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="mono" id="pop">Population 0</div>
+  <h1>Names in <em>World</em></h1>
+
+  <div id="map"><img src="map.jpg" width="1800" height="1800" alt="Night view from above of a small island with a lighthouse in the middle and houses along winding paths."><div id="tag"></div></div>
+
+  <section>
+    <h2>Want a <em>house?</em></h2>
+    <ol>
+      <li>Find <b>@names_in_world</b> on Instagram, TikTok or YouTube.</li>
+      <li>Comment <b>house</b> under any video, any time.</li>
+      <li>Within 24 hours your name is on this map, with your number.</li>
+    </ol>
+  </section>
+
+  <section>
+    <label for="q">Already commented? Find your house</label>
+    <input id="q" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="your username">
+    <p id="found" aria-live="polite"></p>
+    <ul id="list"></ul>
+  </section>
+
+  <section>
+    <h2>The <em>rules</em></h2>
+    <p class="fine">First comment gets the lowest number, and your number never changes. One house per account. 16+ only.</p>
+    <p class="fine">We show your account's username as it is, and we read every name before it goes up. Offensive names stay off the map.</p>
+    <p class="fine">Want out? Comment <b>remove</b> or message @names_in_world. Your name comes off this map within 24 hours and stays out of future videos. The number is retired, nobody else gets it.</p>
+    <p class="fine">This page has no cookies and no tracking.</p>
+  </section>
+</main>
+<script type="module">
+import { place, displayName } from './layout.js'
+
+const SPAN = 46, HOUSES = 10, OUTWARD = .85   // house centre sits this far beyond its plot, as in island_blender.py
+const map = document.getElementById('map'), tag = document.getElementById('tag'), list = document.getElementById('list'), found = document.getElementById('found')
+const all = await fetch('names.json', { cache: 'no-store' }).then(r => r.json()).catch(() => [])
+const live = all.filter(c => !c.removed)
+const pins = new Map()
+
+document.getElementById('pop').textContent = `Population ${live.length}`
+
+function label(c) { return `#${c.n}  ${displayName(c.name)}` }
+
+function pin(n, citizen) {
+  const p = place(n), k = (p.r + OUTWARD) / p.r
+  const u = .5 + p.x * k / SPAN, v = .5 - p.z * k / SPAN
+  if (u < .02 || u > .98 || v < .02 || v > .98) return   // shortcut: the render covers about 115 plots, re-render a wider map before then
+  const b = document.createElement('button')
+  b.className = citizen ? 'pin' : 'pin open'
+  b.style.left = `${u * 100}%`; b.style.top = `${v * 100}%`
+  const text = citizen ? label(citizen) : `#${n} open`
+  b.setAttribute('aria-label', text)
+  b.onclick = () => { tag.textContent = text }
+  map.append(b)
+  pins.set(n, b)
+}
+
+const taken = new Set(all.map(c => c.n))
+live.forEach(c => pin(c.n, c))
+for (let n = 1; n <= Math.max(HOUSES, all.length + 1); n++) if (!taken.has(n)) pin(n, null)
+
+function row(c) {
+  const li = document.createElement('li'), b = document.createElement('b')
+  b.textContent = `#${c.n} `
+  li.append(b, displayName(c.name))
+  return li
+}
+list.append(...live.map(row))
+
+document.getElementById('q').addEventListener('input', e => {
+  const q = e.target.value.trim().replace(/^@/, '').toLowerCase()
+  document.querySelectorAll('.pin.me').forEach(x => x.classList.remove('me'))
+  const hits = q ? live.filter(c => c.name.toLowerCase().includes(q)) : live
+  list.replaceChildren(...hits.map(row))
+  if (!q) { found.textContent = ''; tag.textContent = ''; return }
+  const exact = live.find(c => c.name.toLowerCase() === q)
+  if (exact) {
+    pins.get(exact.n)?.classList.add('me')
+    tag.textContent = label(exact)
+    found.textContent = `Found you. You are number ${exact.n}.`
+  } else {
+    tag.textContent = ''
+    found.textContent = hits.length ? '' : 'Not on the map yet. New names go up within 24 hours of your comment.'
+  }
+})
+</script>
+</body>
+</html>
