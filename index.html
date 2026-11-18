@@ -8,11 +8,10 @@
 <meta property="og:title" content="Names in World">
 <meta property="og:description" content="Comment house. Get a house and a number that never changes.">
 <meta property="og:image" content="map.jpg">
-<link rel="modulepreload" href="vendor/three/build/three.module.js">
-<script type="importmap">{"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}</script>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Italiana&family=DM+Mono&display=swap">
 <style>
-@font-face { font-family: Italiana; src: url(fonts/Italiana-Regular.ttf); font-display: swap; }
-@font-face { font-family: "DM Mono"; src: url(fonts/DMMono-Regular.ttf); font-display: swap; }
 :root { --bg: #05080f; --panel: #0d1320; --line: #232b3d; --text: #eef0f4; --dim: #9aa3b5; --amber: #f2b15c; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -85,7 +84,7 @@ input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
 
   <section>
     <h2>The <em>rules</em></h2>
-    <p class="fine">First comment gets the lowest number, and your number never changes. One house per account. 16+ only.</p>
+    <p class="fine">First comment gets the lowest number, and your number never changes. One house per account.</p>
     <p class="fine">We show your account's username as it is, and we read every name before it goes up. Offensive names stay off the island.</p>
     <p class="fine">Want out? Comment <b>remove</b> or message @names_in_world. Your name comes off this island within 24 hours and stays out of future videos. The number is retired, nobody else gets it.</p>
     <p class="fine">This page has no cookies and no tracking.</p>
