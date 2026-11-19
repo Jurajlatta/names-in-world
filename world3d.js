@@ -1,13 +1,13 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { place, displayName } from './layout.js'
 
 const stage = document.getElementById('stage'), tag = document.getElementById('tag'), list = document.getElementById('list')
 const found = document.getElementById('found'), status = document.getElementById('status'), labelsBox = document.getElementById('labels')
 const STILL = matchMedia('(prefers-reduced-motion: reduce)').matches
-const MOON = new THREE.Vector3(30, 45, 30).normalize()   // same side as the moonlight baked into the island
-const SKY_LOW = '0.0135, 0.021, 0.042', SKY_HIGH = '0.0016, 0.003, 0.009', LABELS = 14
+const SKY_LOW = '0.0135, 0.021, 0.042', SKY_HIGH = '0.0016, 0.003, 0.009', LABELS = 14, OPEN_LABELS = 3
 
 const people = await fetch('names.json', { cache: 'no-store' }).then(r => r.json()).catch(() => [])
 const live = people.filter(c => !c.removed), taken = new Set(people.map(c => c.n))
@@ -51,26 +51,40 @@ async function start() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 3.1
 
   const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(36, 1, .1, 1600)
-  const [world, gltf, groundMap, fixedMap] = await Promise.all([
+  const [world, gltf, groundMap, fixedMap, housesMap] = await Promise.all([
     fetch('world.json').then(r => r.json()),
     new GLTFLoader().loadAsync('island.glb'),
     new THREE.TextureLoader().loadAsync('ground.jpg'),
     new THREE.TextureLoader().loadAsync('fixed.jpg'),
+    new THREE.TextureLoader().loadAsync('houses.jpg'),
   ])
   const toThree = ([x, y, z]) => new THREE.Vector3(x, z, -y)   // Blender is z-up
   const seaY = world.seaZ, lampAt = toThree(world.lamp)
+  const MOON = toThree(world.moon).normalize()   // same side as the moonlight baked into the island
 
   // Light is baked into the model, so nothing here computes shadows.
-  for (const m of [groundMap, fixedMap]) { m.colorSpace = THREE.SRGBColorSpace; m.flipY = false; m.anisotropy = renderer.capabilities.getMaxAnisotropy() }
+  for (const m of [groundMap, fixedMap, housesMap]) { m.colorSpace = THREE.SRGBColorSpace; m.flipY = false; m.anisotropy = renderer.capabilities.getMaxAnisotropy() }
   const OFF = new THREE.Color(.012, .016, .026), ON = new THREE.Color(1.15, .56, .17)
-  const windows = {}
+  const isLit = n => taken.has(n) && !people[n - 1]?.removed
+  const windows = {}, panes = [], paneGeo = { on: [], off: [] }
+  const solid = []
   let ground
+  gltf.scene.updateMatrixWorld(true)
   gltf.scene.traverse(o => {
     if (!o.isMesh) return
     if (o.name.startsWith('ground')) { ground = o; o.material = new THREE.MeshBasicMaterial({ map: groundMap }) }
-    else if (/^Pane\d+/.test(o.name)) { const n = +o.name.match(/\d+/)[0]; windows[n] = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()); o.material = new THREE.MeshBasicMaterial({ color: taken.has(n) && !people[n - 1]?.removed ? ON : OFF }) }
-    else o.material = new THREE.MeshBasicMaterial({ map: fixedMap })
+    else if (/^Pane\d+/.test(o.name)) {
+      const n = +o.name.match(/\d+/)[0], g = o.geometry.clone().applyMatrix4(o.matrixWorld)
+      for (const k of Object.keys(g.attributes)) if (k !== 'position') g.deleteAttribute(k)
+      g.computeBoundingBox(); windows[n] = g.boundingBox.getCenter(new THREE.Vector3())
+      paneGeo[isLit(n) ? 'on' : 'off'].push(g); panes.push(o)
+    }
+    else o.material = new THREE.MeshBasicMaterial({ map: o.name.startsWith('houses') ? housesMap : fixedMap })
+    if (!/^Pane/.test(o.name)) solid.push(o)
   })
+  // 94 windows in two draw calls: lit and dark.
+  for (const o of panes) o.removeFromParent()
+  for (const k of ['on', 'off']) if (paneGeo[k].length) scene.add(new THREE.Mesh(mergeGeometries(paneGeo[k]), new THREE.MeshBasicMaterial({ color: k === 'on' ? ON : OFF })))
   scene.add(gltf.scene)
 
   // Sky and sea share one horizon colour, so the join cannot be seen.
@@ -131,8 +145,10 @@ async function start() {
   }))
   beam.position.copy(lampAt); scene.add(beam)
 
-  // Where each number lives. Numbers past the ten built houses wait as lanterns at their exact plot until the island grows.
-  const houseAt = n => world.houses[n] ? toThree(world.houses[n].pos) : null
+  // Where each number lives: every plot of the village is a real house; numbers past it wait as lanterns at their exact plot until the island grows.
+  const H = world.houses
+  const houseAt = n => H[n] ? toThree(H[n].pos) : null
+  const doorOf = n => H[n] ? new THREE.Vector3(H[n].door[0], 0, -H[n].door[1]) : null
   const ray = new THREE.Raycaster()
   function plot(n) {
     const known = houseAt(n)
@@ -143,29 +159,37 @@ async function start() {
     at.y = Math.max(hit ? hit.point.y : seaY, seaY) + .55
     return at
   }
-  const spots = live.map(c => ({ n: c.n, text: `#${c.n}  ${displayName(c.name)}`, short: `#${c.n} ${displayName(c.name)}`, citizen: c, at: plot(c.n) }))
-  const HOUSES = Object.keys(world.houses).map(Number)
-  for (const n of HOUSES) if (!taken.has(n)) spots.push({ n, text: `#${n} open`, short: `#${n} open`, at: houseAt(n) })
+  function spot(n, text, short, citizen) {
+    const at = plot(n), top = H[n] ? H[n].top : at.y + .4
+    return { n, text, short, citizen, at, top, mid: at.clone().setY((at.y + top) / 2) }
+  }
+  const spots = live.map(c => spot(c.n, `#${c.n}  ${displayName(c.name)}`, `#${c.n} ${displayName(c.name)}`, c))
+  for (const n of Object.keys(H).map(Number)) if (!taken.has(n)) spots.push(spot(n, `#${n} open`, `#${n} open`))
 
   const lit = spots.filter(s => s.citizen)
   if (lit.length) {
-    const pos = lit.flatMap(s => {   // the glow hangs just in front of the window, on the lighthouse side
-      const w = windows[s.n], a = w ? w.clone().addScaledVector(new THREE.Vector3(w.x, 0, w.z).normalize(), -.28) : s.at
+    const pos = lit.flatMap(s => {   // the glow hangs just in front of the window
+      const w = windows[s.n], a = w ? w.clone().addScaledVector(doorOf(s.n), .22) : s.at
       return [a.x, a.y, a.z]
     })
     const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ map: glow, color: new THREE.Color(1, .52, .18), size: 2.6, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })))
+    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ map: glow, color: new THREE.Color(1, .52, .18), size: 1.8, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })))
+  }
+  if (world.lanterns?.length) {   // lane lanterns: their light is baked, the halo is not
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(world.lanterns.flatMap(p => toThree(p).toArray()), 3))
+    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ map: glow, color: new THREE.Color(1, .66, .34), size: 1.1, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })))
   }
 
   const labels = Array.from({ length: LABELS }, () => { const d = document.createElement('div'); d.className = 'label'; labelsBox.append(d); return d })
 
   const controls = new OrbitControls(camera, canvas)
   controls.enablePan = false; controls.enableDamping = true; controls.dampingFactor = .07
-  controls.minDistance = 2.6; controls.maxDistance = 70; controls.maxPolarAngle = 1.5
+  controls.minDistance = 2.2; controls.maxDistance = 70; controls.maxPolarAngle = 1.5
   controls.autoRotate = !STILL; controls.autoRotateSpeed = .28
-  const HOME_TARGET = new THREE.Vector3(0, 1.2, 0), HOME_CAM = new THREE.Vector3(-15, 10.5, 17.5)
+  // From the harbour side, as in the videos: the shore, stilt houses and the duplex face this way.
+  const HOME_TARGET = new THREE.Vector3(0, 1.2, 0), HOME_CAM = new THREE.Vector3(22, 20.5, 35)
   controls.target.copy(HOME_TARGET)
-  camera.position.copy(STILL ? HOME_CAM : new THREE.Vector3(-58, 40, 70))
+  camera.position.copy(STILL ? HOME_CAM : new THREE.Vector3(50, 46, 80))
 
   // One move at a time: the intro, or a flight to a house. Touching the map cancels it.
   let move = STILL ? null : { from: camera.position.clone(), to: HOME_CAM.clone(), fromT: HOME_TARGET.clone(), toT: HOME_TARGET.clone(), t: 0, len: 4.2 }
@@ -173,12 +197,28 @@ async function start() {
     if (STILL) { camera.position.copy(to); controls.target.copy(toT); return }
     move = { from: camera.position.clone(), to, fromT: controls.target.clone(), toT, t: 0, len }
   }
+  // The village is dense, so the camera takes the first spot in front of the door that no roof or hill hides.
+  const AIM = [[.55, 4.6], [-.55, 4.6], [.25, 5], [-.25, 5], [.9, 4.2], [-.9, 4.2], [.5, 6], [-.5, 6], [0, 3.6]]
+  function doorView(s) {
+    const door = doorOf(s.n), h = s.top - s.at.y, k = THREE.MathUtils.clamp(h / 1.4, .9, 1.4), aim = s.at.clone().addScaledVector(door, .5).setY(s.at.y + h * .35)
+    let first
+    for (const [a, d] of AIM) {
+      const dir = door.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, a)
+      const cam = s.at.clone().addScaledVector(dir, d * k).setY(s.at.y + (1.1 + d * .3) * k)
+      first ??= cam
+      const to = cam.clone().sub(aim), len = to.length()
+      ray.set(aim, to.normalize()); ray.far = len
+      if (!ray.intersectObjects(solid, false).length) { ray.far = Infinity; return [cam, s.at.clone().setY(s.at.y + h * .45)] }   // cast from the door out, so a camera inside another house counts as hidden
+    }
+    ray.far = Infinity
+    return [first, s.at.clone().setY(s.at.y + h * .45)]
+  }
   flyTo = n => {
     const s = spots.find(x => x.n === n); if (!s) return
-    const out = new THREE.Vector3(s.at.x, 0, s.at.z).normalize()   // doors and windows face the lighthouse, so the camera looks from that side
-    const side = new THREE.Vector3(-out.z, 0, out.x)
     controls.autoRotate = false
-    goTo(s.at.clone().addScaledVector(out, houseAt(n) ? -4.3 : 4.6).addScaledVector(side, 3.1).setY(s.at.y + 1.9), s.at.clone().setY(s.at.y + .55), 1.9)
+    if (H[n]) { const [cam, look] = doorView(s); goTo(cam, look, 1.9); return }
+    const out = new THREE.Vector3(s.at.x, 0, s.at.z).normalize(), side = new THREE.Vector3(-out.z, 0, out.x)   // a lantern: from the sea side
+    goTo(s.at.clone().addScaledVector(out, 4.6).addScaledVector(side, 3.1).setY(s.at.y + 1.9), s.at.clone().setY(s.at.y + .55), 1.9)
   }
   canvas.addEventListener('pointerdown', () => { move = null; controls.autoRotate = false })
   canvas.addEventListener('wheel', () => { move = null; controls.autoRotate = false }, { passive: true })
@@ -192,7 +232,7 @@ async function start() {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 8) return
     const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top
     let best = null, bestD = 34
-    for (const s of spots) { const p = toScreen(s.at, r.width, r.height), d = Math.hypot(p.x - x, p.y - y); if (p.front && d < bestD) { best = s; bestD = d } }
+    for (const s of spots) { const p = toScreen(s.mid, r.width, r.height), d = Math.hypot(p.x - x, p.y - y); if (p.front && d < bestD) { best = s; bestD = d } }
     if (best) { tag.textContent = best.text; flyTo(best.n) } else tag.textContent = ''
   })
 
@@ -208,14 +248,15 @@ async function start() {
   function drawLabels() {
     const w = stage.clientWidth, h = stage.clientHeight, placed = []
     const near = spots.map(s => [s, camera.position.distanceToSquared(s.at)]).sort((a, b) => (b[0].citizen ? 1 : 0) - (a[0].citizen ? 1 : 0) || a[1] - b[1])
-    let used = 0
+    let used = 0, open = 0
     for (const [s] of near) {
       if (used === LABELS) break
-      place2.copy(s.at); place2.y += houseAt(s.n) ? 1.55 : .4
+      if (!s.citizen && open === OPEN_LABELS) continue   // only the nearest free plots say so, or 60 tags would cover the village
+      place2.copy(s.at); place2.y = s.top + .15
       const p = toScreen(place2, w, h), half = Math.min(s.short.length * 3.4 + 8, 85)
       if (!p.front || p.x < 0 || p.x > w || p.y < 120 || p.y > h) continue
       if (placed.some(q => Math.abs(q.x - p.x) < q.half + half && Math.abs(q.y - p.y) < 22)) continue   // nearest wins, the rest wait until the camera comes closer
-      placed.push({ x: p.x, y: p.y, half })
+      placed.push({ x: p.x, y: p.y, half }); if (!s.citizen) open++
       const d = labels[used++]
       if (d.textContent !== s.short) { d.textContent = s.short; d.classList.toggle('open', !s.citizen) }
       d.style.display = 'block'; d.style.transform = `translate(-50%, -100%) translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`
